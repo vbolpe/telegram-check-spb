@@ -1,14 +1,12 @@
 import os
 import socket
-import asyncio
 import logging
 from datetime import datetime
 
 import pandas as pd
 from ping3 import ping
-from telegram import Bot, Update
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -29,7 +27,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 def check_ping(host: str, timeout: float = 2.0) -> bool:
-    """Devuelve True si el host responde a ping."""
     if not host or str(host).strip().lower() in ("nan", ""):
         return False
     try:
@@ -40,7 +37,6 @@ def check_ping(host: str, timeout: float = 2.0) -> bool:
 
 
 def check_port(host: str, port: int, timeout: float = 3.0) -> bool:
-    """Devuelve True si el puerto TCP está abierto."""
     if not host or str(host).strip().lower() in ("nan", ""):
         return False
     try:
@@ -55,13 +51,11 @@ def check_port(host: str, port: int, timeout: float = 3.0) -> bool:
 # ─────────────────────────────────────────────
 
 def monitorear_red() -> str:
-    """Lee el Excel y ejecuta los chequeos. Devuelve el mensaje formateado."""
     try:
         df = pd.read_excel(EXCEL_PATH, dtype=str)
     except Exception as e:
         return f"❌ *Error al leer el archivo Excel:*\n`{e}`"
 
-    # Normalizar nombres de columnas (quitar espacios extra)
     df.columns = [c.strip() for c in df.columns]
 
     columnas_requeridas = [
@@ -75,7 +69,7 @@ def monitorear_red() -> str:
 
     ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
     lineas = [
-        f"🖥️ *MONITOREO DE RED*",
+        "🖥️ *MONITOREO DE RED*",
         f"🕐 `{ahora}`",
         "─" * 32,
     ]
@@ -86,10 +80,8 @@ def monitorear_red() -> str:
             sistema = "Sin nombre"
 
         router_ip = str(row.get("ROUTER", "")).strip()
-
         lineas.append(f"\n📍 *{sistema}*")
 
-        # ── 1. Chequeo del ROUTER ──────────────────
         router_ok = check_ping(router_ip)
         if not router_ok:
             lineas.append(f"  🔴 *TOTALMENTE CAÍDO* (Router `{router_ip}` sin respuesta)")
@@ -98,61 +90,46 @@ def monitorear_red() -> str:
 
         lineas.append(f"  🌐 Router: ✅ `{router_ip}`")
 
-        # ── 2. Servidor UIP (puerto 80) ────────────
         uip_ip = str(row.get("SERVIDOR (UIP)", "")).strip()
         if uip_ip and uip_ip.lower() != "nan":
             uip_ok = check_port(uip_ip, 80)
-            estado_uip = "✅" if uip_ok else "❌"
-            lineas.append(f"  🖥️  Servidor UIP: {estado_uip} `{uip_ip}:80`")
+            lineas.append(f"  🖥️  Servidor UIP: {'✅' if uip_ok else '❌'} `{uip_ip}:80`")
         else:
             lineas.append("  🖥️  Servidor UIP: ⚠️ No configurado")
 
-        # ── 3. Proxmox (puerto 8006) ───────────────
         proxmox_ip = str(row.get("PROXMOX", "")).strip()
         if proxmox_ip and proxmox_ip.lower() != "nan":
             prox_ok = check_port(proxmox_ip, 8006)
-            estado_prox = "✅" if prox_ok else "❌"
-            lineas.append(f"  📦 Proxmox: {estado_prox} `{proxmox_ip}:8006`")
+            lineas.append(f"  📦 Proxmox: {'✅' if prox_ok else '❌'} `{proxmox_ip}:8006`")
         else:
             lineas.append("  📦 Proxmox: ⚠️ No configurado")
 
-        # ── 4. Puestos de trabajo ──────────────────
         puestos = {
             "Puesto 1": str(row.get("Puesto 1", "")).strip(),
             "Puesto 2": str(row.get("Puesto 2", "")).strip(),
             "Puesto 3": str(row.get("Puesto 3 (Director)", "")).strip(),
         }
 
-        activos = 0
-        total = 0
-        detalles_puestos = []
-
+        activos, total, detalles = 0, 0, []
         for nombre, ip in puestos.items():
             if ip and ip.lower() != "nan":
                 total += 1
                 ok = check_ping(ip)
                 if ok:
                     activos += 1
-                detalles_puestos.append(f"`{ip}` {'✅' if ok else '❌'}")
+                detalles.append(f"`{ip}` {'✅' if ok else '❌'}")
 
         if total > 0:
-            if activos == total:
-                icono_puestos = "✅"
-            elif activos == 0:
-                icono_puestos = "❌"
-            else:
-                icono_puestos = "⚠️"
-            lineas.append(f"  💻 Puestos: {icono_puestos} {activos}/{total} activos")
-            lineas.append(f"     {' | '.join(detalles_puestos)}")
+            icono = "✅" if activos == total else ("❌" if activos == 0 else "⚠️")
+            lineas.append(f"  💻 Puestos: {icono} {activos}/{total} activos")
+            lineas.append(f"     {' | '.join(detalles)}")
         else:
             lineas.append("  💻 Puestos: ⚠️ No configurados")
 
-        # ── 5. IPMI (solo ping informativo) ───────
         ipmi_ip = str(row.get("IPMI", "")).strip()
         if ipmi_ip and ipmi_ip.lower() != "nan":
             ipmi_ok = check_ping(ipmi_ip)
-            estado_ipmi = "✅" if ipmi_ok else "❌"
-            lineas.append(f"  🔧 IPMI: {estado_ipmi} `{ipmi_ip}`")
+            lineas.append(f"  🔧 IPMI: {'✅' if ipmi_ok else '❌'} `{ipmi_ip}`")
 
         lineas.append("─" * 32)
 
@@ -161,28 +138,23 @@ def monitorear_red() -> str:
 
 
 # ─────────────────────────────────────────────
-#  Envío del informe
+#  Tarea programada (job_queue de PTB)
 # ─────────────────────────────────────────────
 
-async def enviar_informe(bot: Bot):
-    logger.info("Ejecutando monitoreo de red...")
+async def tarea_monitoreo(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Ejecutando monitoreo automático...")
     mensaje = monitorear_red()
-    try:
-        # Telegram tiene límite de 4096 chars por mensaje
-        max_len = 4000
-        for i in range(0, len(mensaje), max_len):
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=mensaje[i:i + max_len],
-                parse_mode="Markdown"
-            )
-        logger.info("Informe enviado correctamente.")
-    except Exception as e:
-        logger.error(f"Error al enviar mensaje: {e}")
+    for i in range(0, len(mensaje), 4000):
+        await context.bot.send_message(
+            chat_id=CHAT_ID,
+            text=mensaje[i:i + 4000],
+            parse_mode="Markdown"
+        )
+    logger.info("Informe automático enviado.")
 
 
 # ─────────────────────────────────────────────
-#  Handlers de Telegram
+#  Handlers de comandos
 # ─────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,53 +170,59 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_chequear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Iniciando chequeo manual, aguardá un momento...")
     mensaje = monitorear_red()
-    max_len = 4000
-    for i in range(0, len(mensaje), max_len):
-        await update.message.reply_text(mensaje[i:i + max_len], parse_mode="Markdown")
+    for i in range(0, len(mensaje), 4000):
+        await update.message.reply_text(mensaje[i:i + 4000], parse_mode="Markdown")
 
 
 async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    scheduler: AsyncIOScheduler = context.bot_data.get("scheduler")
-    if scheduler:
-        jobs = scheduler.get_jobs()
-        if jobs:
-            proximo = jobs[0].next_run_time
-            texto = f"⏰ Próximo chequeo automático:\n`{proximo.strftime('%d/%m/%Y %H:%M:%S')}`"
-        else:
-            texto = "⚠️ No hay tareas programadas."
+    jobs = context.job_queue.get_jobs_by_name("monitoreo_red")
+    if jobs:
+        proximo = jobs[0].next_t
+        texto = f"⏰ Próximo chequeo automático:\n`{proximo.strftime('%d/%m/%Y %H:%M:%S')}`"
     else:
-        texto = "⚠️ Scheduler no disponible."
+        texto = "⚠️ No hay tareas programadas."
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 
 # ─────────────────────────────────────────────
-#  Main
+#  post_init: registrar jobs dentro del event
+#  loop de PTB (evita el conflicto de loops)
 # ─────────────────────────────────────────────
 
-async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+async def post_init(application: Application):
+    # Chequeo inicial 10 segundos después de arrancar
+    application.job_queue.run_once(
+        tarea_monitoreo, when=10, name="monitoreo_inicial"
+    )
+    # Luego cada 12 horas
+    application.job_queue.run_repeating(
+        tarea_monitoreo,
+        interval=43200,
+        first=43200,
+        name="monitoreo_red"
+    )
+    logger.info("Jobs registrados: inicio en 10 s, luego cada 12 hs.")
 
-    # Registrar comandos
+
+# ─────────────────────────────────────────────
+#  Main — sin asyncio.run(), PTB maneja el loop
+# ─────────────────────────────────────────────
+
+def main():
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("chequear", cmd_chequear))
     app.add_handler(CommandHandler("estado", cmd_estado))
 
-    # Scheduler cada 12 horas
-    scheduler = AsyncIOScheduler(timezone="America/Argentina/Buenos_Aires")
-    scheduler.add_job(
-        enviar_informe,
-        trigger="interval",
-        hours=12,
-        args=[app.bot],
-        id="monitoreo_red",
-        next_run_time=datetime.now()  # Ejecutar al arrancar
-    )
-    scheduler.start()
-    app.bot_data["scheduler"] = scheduler
-
     logger.info("Bot iniciado. Esperando mensajes...")
-    await app.run_polling(allowed_updates=["message"])
+    app.run_polling(allowed_updates=["message"])
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
